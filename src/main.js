@@ -2,6 +2,7 @@ import "./style.css";
 
 import * as THREE from "three";
 import { OrbitControls, OBJLoader } from "three-stdlib";
+import SurfaceSampler from "./SurfaceSampler.js";
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x111111);
@@ -82,6 +83,23 @@ loader.load("/models/1.obj", (object) => {
   model.scale.setScalar(2 / maxDim);
 
   scene.add(model);
+  let firstMesh = null;
+
+model.traverse((child)=>{
+
+    if(child.isMesh && !firstMesh){
+
+        firstMesh = child;
+
+    }
+
+});
+
+const points = SurfaceSampler.sample(firstMesh, 100000);
+
+alert(points.length);
+
+console.log(points);
 
 });
 

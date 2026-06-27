@@ -2,19 +2,21 @@ import "./style.css";
 import * as THREE from "three";
 import { OrbitControls, OBJLoader } from "three-stdlib";
 import SurfaceSampler from "./SurfaceSampler.js";
-import ParticleCloud from "./ParticleCloud.js";
 
-// ─── SCENA ───────────────────────────────────────────
+// ─── SCENA ───────────────────────────────────────────────────────────────────
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x111111);
 
-// ─── CAMERA ──────────────────────────────────────────
+// ─── CAMERA ──────────────────────────────────────────────────────────────────
 const camera = new THREE.PerspectiveCamera(
-  60, window.innerWidth / window.innerHeight, 0.1, 100
+  60,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  100
 );
 camera.position.set(0, 0, 4);
 
-// ─── RENDERER ────────────────────────────────────────
+// ─── RENDERER ────────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -27,24 +29,25 @@ window.addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ─── LUCI ────────────────────────────────────────────
+// ─── LUCI ────────────────────────────────────────────────────────────────────
 scene.add(new THREE.AmbientLight(0xffffff, 2));
 const dirLight = new THREE.DirectionalLight(0xffffff, 3);
 dirLight.position.set(5, 5, 5);
 scene.add(dirLight);
 
-// ─── CONTROLS ────────────────────────────────────────
+// ─── ORBIT CONTROLS ──────────────────────────────────────────────────────────
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-// ─── AUDIO ───────────────────────────────────────────
+// ─── AUDIO ───────────────────────────────────────────────────────────────────
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
 function playTransitionNoise(duration = 1.5) {
   if (audioCtx.state === "suspended") audioCtx.resume();
-  const bufferSize = Math.floor(audioCtx.sampleRate * duration);
-  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-  const data = buffer.getChannelData(0);
+  const sr         = audioCtx.sampleRate;
+  const bufferSize = Math.floor(sr * duration);
+  const buffer     = audioCtx.createBuffer(1, bufferSize, sr);
+  const data       = buffer.getChannelData(0);
   for (let i = 0; i < bufferSize; i++) {
     data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 1.5);
   }
@@ -66,137 +69,172 @@ function playTransitionNoise(duration = 1.5) {
   source.start();
 }
 
-// ─── COSTANTI ────────────────────────────────────────
-const N            = 300000;
-const MORPH_DUR    = 2.8;   // durata fase morph (secondi)
-const REST_DUR     = 3.5;   // durata pausa sulla forma
+// ─── COSTANTI ────────────────────────────────────────────────────────────────
+const N         = 150000;   // particelle (ridotto per performance)
+const MORPH_DUR = 2.8;      // secondi fase morph
+const REST_DUR  = 4.0;      // secondi pausa sulla forma
 
-// ─── STATO ───────────────────────────────────────────
-const shapesPos = [];       // Float32Array[3]
-let cloud       = null;     // ParticleCloud
-let group       = null;     // THREE.Group wrapper per la rotazione
+// ─── STATO GLOBALE ───────────────────────────────────────────────────────────
+const shapesPos = [];        // [Float32Array, Float32Array, Float32Array]
+let geometry    = null;      // THREE.BufferGeometry condivisa
+let points      = null;      // THREE.Points
+let group       = null;      // wrapper per rotazione
 
 let currentIdx  = 0;
 let fromPos     = null;
 let toPos       = null;
 
-let phase       = "rest";   // "rest" | "morph"
-let phaseT      = 0;        // tempo rimanente nella fase corrente
+let phase       = "rest";
+let phaseTimer  = REST_DUR;
 
-// rotazione continua sull'asse Y del gruppo
 let rotY        = 0;
-let rotSpeed    = 0.003;    // rad/frame base
+let rotSpeed    = 0.008;     // rad/s base (velocità lenta a riposo)
 
-// ─── EASING ──────────────────────────────────────────
+// ─── EASING ──────────────────────────────────────────────────────────────────
 function easeInOut(t) {
   return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
 }
 
-// ─── TURBOLENZA VISIVA ────────────────────────────────
+// ─── TURBOLENZA ──────────────────────────────────────────────────────────────
 function applyTurbulence(arr, intensity) {
-  // agita solo 1 particella su 4 per performance
-  for (let i = 0; i < arr.length; i += 4 * 3) {
-    arr[i]     += (Math.random() - 0.5) * intensity * 0.12;
-    arr[i + 1] += (Math.random() - 0.5) * intensity * 0.12;
-    arr[i + 2] += (Math.random() - 0.5) * intensity * 0.12;
+  // ogni 8 particelle per performance
+  for (let i = 0; i < arr.length; i += 8 * 3) {
+    arr[i]     += (Math.random() - 0.5) * intensity * 0.15;
+    arr[i + 1] += (Math.random() - 0.5) * intensity * 0.15;
+    arr[i + 2] += (Math.random() - 0.5) * intensity * 0.15;
   }
 }
 
-// ─── LOAD OBJ ────────────────────────────────────────
+// ─── CARICAMENTO OBJ ─────────────────────────────────────────────────────────
 function loadOBJ(path) {
-  return new Promise((resolve) => {
-    new OBJLoader().load(path, (obj) => {
-      obj.traverse((child) => {
-        if (child.isMesh) {
-          // centra
-          child.geometry.computeBoundingBox();
-          const box = child.geometry.boundingBox;
-          const center = new THREE.Vector3();
-          box.getCenter(center);
-          child.geometry.translate(-center.x, -center.y, -center.z);
-          // campiona (la scala avviene dentro SurfaceSampler)
-          resolve(SurfaceSampler.sample(child, N));
-        }
-      });
-    });
+  return new Promise((resolve, reject) => {
+    new OBJLoader().load(
+      path,
+      (obj) => {
+        let found = false;
+        obj.traverse((child) => {
+          if (child.isMesh && !found) {
+            found = true;
+            console.log(`Loaded ${path}: geometry index=${child.geometry.index !== null}`);
+            const pos = SurfaceSampler.sample(child.geometry, N);
+            console.log(`Sampled ${path}: first point = ${pos[0].toFixed(3)}, ${pos[1].toFixed(3)}, ${pos[2].toFixed(3)}`);
+            resolve(pos);
+          }
+        });
+        if (!found) reject(new Error(`No mesh in ${path}`));
+      },
+      undefined,
+      reject
+    );
   });
 }
 
-// ─── INIT ────────────────────────────────────────────
+// ─── INIZIALIZZAZIONE ─────────────────────────────────────────────────────────
 async function init() {
+  console.log("Loading 3 OBJ files...");
+
   const [p1, p2, p3] = await Promise.all([
     loadOBJ("/models/1.obj"),
     loadOBJ("/models/2.obj"),
     loadOBJ("/models/3.obj"),
   ]);
+
   shapesPos.push(p1, p2, p3);
+  console.log("All shapes loaded. Creating particle cloud...");
 
-  // crea cloud con prima forma
-  cloud = new ParticleCloud(new Float32Array(p1));
+  // Geometria condivisa — STESSO buffer, aggiornato ogni frame durante morph
+  geometry = new THREE.BufferGeometry();
+  const initialPos = new Float32Array(p1); // copia della prima forma
+  geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(initialPos, 3)
+  );
 
-  // gruppo wrapper: la rotazione va qui, non sul cloud
+  const material = new THREE.PointsMaterial({
+    color: 0xffffff,
+    size: 0.006,
+    sizeAttenuation: true,
+  });
+
+  points = new THREE.Points(geometry, material);
+
   group = new THREE.Group();
-  group.add(cloud.points);
+  group.add(points);
   scene.add(group);
 
-  phase  = "rest";
-  phaseT = REST_DUR;
+  phase      = "rest";
+  phaseTimer = REST_DUR;
+  fromPos    = new Float32Array(p1);
+
+  console.log("Ready.");
 }
 
 init();
 
-// ─── ANIMATE ─────────────────────────────────────────
+// ─── LOOP ────────────────────────────────────────────────────────────────────
 const clock = new THREE.Clock();
 
 function animate() {
   requestAnimationFrame(animate);
-  const dt = clock.getDelta();
+  const dt = Math.min(clock.getDelta(), 0.05); // cap a 50ms per sicurezza
 
-  if (cloud && shapesPos.length === 3) {
-    phaseT -= dt;
+  if (points && shapesPos.length === 3) {
+    phaseTimer -= dt;
+
+    const posArr = geometry.attributes.position.array;
 
     if (phase === "rest") {
 
       // rotazione lenta costante
-      rotSpeed += (0.003 - rotSpeed) * 0.04;
-      rotY += rotSpeed;
+      rotSpeed += (0.008 - rotSpeed) * 0.03;
+      rotY += rotSpeed * dt;
       group.rotation.y = rotY;
 
-      if (phaseT <= 0) {
-        // prepara morph
+      if (phaseTimer <= 0) {
         const nextIdx = (currentIdx + 1) % 3;
-        fromPos = new Float32Array(shapesPos[currentIdx]);
-        toPos   = shapesPos[nextIdx];
+        console.log(`Morphing: shape ${currentIdx} → shape ${nextIdx}`);
+
+        fromPos    = new Float32Array(posArr); // stato visivo corrente (con turbolenza)
+        toPos      = shapesPos[nextIdx];
         currentIdx = nextIdx;
-        phase  = "morph";
-        phaseT = MORPH_DUR;
-        playTransitionNoise(MORPH_DUR * 0.9);
+        phase      = "morph";
+        phaseTimer = MORPH_DUR;
+
+        playTransitionNoise(MORPH_DUR * 0.8);
       }
 
     } else {
-      // ── MORPH ──
-      const rawT = 1 - phaseT / MORPH_DUR;           // 0 → 1
+      // ── MORPH ──────────────────────────────────────────────────────────────
+      const rawT = 1 - phaseTimer / MORPH_DUR;  // 0 → 1
       const t    = easeInOut(Math.min(rawT, 1));
+      const turbI = Math.sin(rawT * Math.PI);     // picco a metà
 
-      // turbolenza: picco a metà
-      const turbI = Math.sin(rawT * Math.PI);
-
-      const arr = cloud.points.geometry.attributes.position.array;
-
-      for (let i = 0; i < arr.length; i++) {
-        arr[i] = fromPos[i] + (toPos[i] - fromPos[i]) * t;
+      // lerp posizioni
+      for (let i = 0; i < posArr.length; i++) {
+        posArr[i] = fromPos[i] + (toPos[i] - fromPos[i]) * t;
       }
-      applyTurbulence(arr, turbI);
-      cloud.points.geometry.attributes.position.needsUpdate = true;
 
-      // rotazione accelera durante morph, poi torna lenta
-      rotSpeed += (0.003 + turbI * 0.04 - rotSpeed) * 0.06;
-      rotY += rotSpeed;
+      // turbolenza visiva
+      applyTurbulence(posArr, turbI);
+
+      geometry.attributes.position.needsUpdate = true;
+
+      // rotazione accelera durante morph
+      const targetSpeed = 0.008 + turbI * 0.12;
+      rotSpeed += (targetSpeed - rotSpeed) * 0.06;
+      rotY += rotSpeed * dt;
       group.rotation.y = rotY;
 
-      if (phaseT <= 0) {
-        phase  = "rest";
-        phaseT = REST_DUR;
+      if (phaseTimer <= 0) {
+        // snap finale: copia pulita della forma target (senza turbolenza residua)
+        for (let i = 0; i < posArr.length; i++) {
+          posArr[i] = toPos[i];
+        }
+        geometry.attributes.position.needsUpdate = true;
+
+        phase      = "rest";
+        phaseTimer = REST_DUR;
+        fromPos    = new Float32Array(toPos);
       }
     }
   }

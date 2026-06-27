@@ -2,30 +2,63 @@ import * as THREE from "three";
 
 export default class ParticleCloud {
 
-  constructor(positions) {
+    constructor(positions) {
 
-    const geometry = new THREE.BufferGeometry();
+        this.count = positions.length / 3;
 
-    geometry.setAttribute(
-      "position",
-      new THREE.BufferAttribute(positions, 3)
-    );
+        this.geometry = new THREE.BufferGeometry();
 
-    const material = new THREE.PointsMaterial({
+        // posizione corrente
+        this.current = new Float32Array(positions);
 
-      color: 0xffffff,
+        // posizione target
+        this.target = new Float32Array(positions);
 
-      size: 0.006,
+        // buffer geometry
+        this.geometry.setAttribute(
+            "position",
+            new THREE.BufferAttribute(this.current, 3)
+        );
 
-      sizeAttenuation: true
+        this.material = new THREE.PointsMaterial({
 
-    });
+            color: 0xffffff,
 
-    this.points = new THREE.Points(
-      geometry,
-      material
-    );
+            size: 0.008,
 
-  }
+            sizeAttenuation: true,
+
+            transparent: true,
+
+            opacity: 1
+
+        });
+
+        this.points = new THREE.Points(
+            this.geometry,
+            this.material
+        );
+
+    }
+
+    setTarget(targetPositions){
+
+        this.target.set(targetPositions);
+
+    }
+
+    update(speed = 0.08){
+
+        const position = this.geometry.attributes.position.array;
+
+        for(let i = 0; i < position.length; i++){
+
+            position[i] += (this.target[i] - position[i]) * speed;
+
+        }
+
+        this.geometry.attributes.position.needsUpdate = true;
+
+    }
 
 }
